@@ -1,6 +1,7 @@
 ---
-# KVM VM Cloning Playbook
-# Clones a template VM and customizes each clone with unique hostname, IP, and resources
+# KVM VM Cloning Playbook (Parallel Execution)
+# Clones template VM and customizes each clone with unique hostname, IP, and resources
+# All operations run in parallel for maximum speed
 
 - name: Clone and provision KVM virtual machines
   hosts: hypervisor
@@ -10,9 +11,9 @@
     - vars/vms.yml
 
   tasks:
-    # -------------------------------------------------------------------------
-    # Pre-flight checks
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # PHASE 0: Pre-flight checks
+    # =========================================================================
     - name: Ensure template VM exists
       ansible.builtin.command:
         cmd: virsh dominfo "{{ template_vm }}"
@@ -43,24 +44,302 @@
       when: template_state.stdout == "running"
       changed_when: false
 
-    # -------------------------------------------------------------------------
-    # Clone VMs
-    # -------------------------------------------------------------------------
-    - name: Clone VMs from template
-      ansible.builtin.include_tasks: tasks/clone-single-vm.yml
+    - name: Check which VMs already exist
+      ansible.builtin.command:
+        cmd: virsh dominfo "{{ item.name }}"
       loop: "{{ vms }}"
       loop_control:
-        loop_var: vm
-        label: "{{ vm.name }}"
+        label: "{{ item.name }}"
+      register: vm_exists_check
+      failed_when: false
+      changed_when: false
 
-    # -------------------------------------------------------------------------
-    # Optionally restart template
-    # -------------------------------------------------------------------------
-    - name: Restart template VM if it was running before
-      ansible.builtin.command:
-        cmd: virsh start "{{ template_vm }}"
+    - name: Build list of VMs to create
+      ansible.builtin.set_fact:
+        vms_to_create: >-
+          {{ vms | zip(vm_exists_check.results) 
+             | selectattr('1.rc', 'ne', 0) 
+             | map(attribute='0') 
+             | list }}
+
+    - name: Display VMs to be created
+      ansible.builtin.debug:
+        msg: "Will create {{ vms_to_create | length }} VMs: {{ vms_to_create | map(attribute='name') | join(', ') }}"
+      when: vms_to_create | length > 0
+
+    - name: No VMs to create
+      ansible.builtin.debug:
+        msg: "All VMs already exist, nothing to do"
+      when: vms_to_create | length == 0
+
+    # =========================================================================
+    # PHASE 1: Clone VMs with virt-clone (SEQUENTIAL - storage pool locks)
+    # =========================================================================
+    - name: "PHASE 1: Clone VMs (sequential due to storage pool locking)"
+      when: vms_to_create | length > 0
+      block:
+        - name: Clone VMs from template
+          ansible.builtin.command:
+            cmd: >
+              virt-clone
+              --original "{{ template_vm }}"
+              --name "{{ item.name }}"
+              --file "{{ disk_pool }}/{{ item.name }}.qcow2"
+              --check path_in_use=off
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: clone_results
+
+    # =========================================================================
+    # PHASE 2: Customize disk images (parallel)
+    # =========================================================================
+    - name: "PHASE 2: Customize disk images"
+      when: vms_to_create | length > 0
+      block:
+        - name: Customize disks with virt-customize (async)
+          ansible.builtin.shell: |
+            virt-customize \
+              -a "{{ disk_pool }}/{{ item.name }}.qcow2" \
+              --hostname "{{ item.name }}" \
+              --write "/etc/network/interfaces:# This file describes the network interfaces available on your system
+            # and how to activate them. For more information, see interfaces(5).
+            source /etc/network/interfaces.d/*
+            # The loopback network interface
+            auto lo
+            iface lo inet loopback
+            # The primary network interface
+            allow-hotplug {{ guest_interface }}
+            iface {{ guest_interface }} inet static
+                    address {{ item.ip }}/{{ network_prefix }}
+                    gateway {{ network_gateway }}
+                    dns-nameservers {{ dns_servers }}
+            " \
+              --truncate /etc/machine-id \
+              --run-command "rm -f /etc/ssh/ssh_host_*" \
+              --run-command "dpkg-reconfigure -f noninteractive openssh-server"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 300
+          poll: 0
+          register: customize_jobs
+
+        - name: Wait for customization to complete
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ customize_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: customize_results
+          until: customize_results.finished
+          retries: 60
+          delay: 5
+          when: item.ansible_job_id is defined
+
+    # =========================================================================
+    # PHASE 3: Configure VM resources (parallel)
+    # =========================================================================
+    - name: "PHASE 3: Configure resources"
+      when: vms_to_create | length > 0
+      block:
+        - name: Set VM resources (async)
+          ansible.builtin.shell: |
+            virsh setmaxmem "{{ item.name }}" "{{ item.ram_mb }}M" --config && \
+            virsh setmem "{{ item.name }}" "{{ item.ram_mb }}M" --config && \
+            virsh setvcpus "{{ item.name }}" "{{ item.vcpu }}" --config --maximum && \
+            virsh setvcpus "{{ item.name }}" "{{ item.vcpu }}" --config
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 60
+          poll: 0
+          register: resource_jobs
+
+        - name: Wait for resource configuration
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ resource_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: resource_results
+          until: resource_results.finished
+          retries: 12
+          delay: 5
+          when: item.ansible_job_id is defined
+
+    # =========================================================================
+    # PHASE 4: Start all VMs (parallel)
+    # =========================================================================
+    - name: "PHASE 4: Start VMs"
+      when: vms_to_create | length > 0
+      block:
+        - name: Start VMs (async)
+          ansible.builtin.command:
+            cmd: virsh start "{{ item.name }}"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 60
+          poll: 0
+          register: start_jobs
+
+        - name: Wait for VM starts
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ start_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: start_results
+          until: start_results.finished
+          retries: 12
+          delay: 5
+          when: item.ansible_job_id is defined
+
+    # =========================================================================
+    # PHASE 5: Wait for SSH (parallel)
+    # =========================================================================
+    - name: "PHASE 5: Wait for SSH"
       when: 
-        - template_state.stdout == "running"
-        - restart_template_after | default(false)
-      register: restart_result
-      changed_when: restart_result.rc == 0
+        - vms_to_create | length > 0
+        - wait_for_ssh | default(true)
+      block:
+        - name: Wait for SSH on all VMs (parallel)
+          ansible.builtin.wait_for:
+            host: "{{ item.ip }}"
+            port: 22
+            delay: 5
+            timeout: 120
+            state: started
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }} ({{ item.ip }})"
+          async: 120
+          poll: 0
+          register: ssh_wait_jobs
+
+        - name: Confirm SSH availability
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ ssh_wait_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: ssh_results
+          until: ssh_results.finished
+          retries: 30
+          delay: 5
+          when: item.ansible_job_id is defined
+
+    # =========================================================================
+    # PHASE 6: Create snapshots (parallel)
+    # =========================================================================
+    - name: "PHASE 6: Create snapshots"
+      when: 
+        - vms_to_create | length > 0
+        - create_snapshot | default(true)
+      block:
+        - name: Shut down VMs for snapshot (async)
+          ansible.builtin.command:
+            cmd: virsh shutdown "{{ item.name }}"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 60
+          poll: 0
+          register: shutdown_jobs
+
+        - name: Wait for shutdown commands
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ shutdown_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: shutdown_cmd_results
+          until: shutdown_cmd_results.finished
+          retries: 12
+          delay: 5
+          when: item.ansible_job_id is defined
+
+        - name: Wait for VMs to be shut off
+          ansible.builtin.command:
+            cmd: virsh domstate "{{ item.name }}"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: vm_state
+          until: vm_state.stdout == "shut off"
+          retries: 30
+          delay: 2
+
+        - name: Create snapshots on all VMs (async)
+          ansible.builtin.command:
+            cmd: >
+              virsh snapshot-create-as "{{ item.name }}"
+              --name "{{ snapshot_name }}"
+              --description "{{ snapshot_description }}"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 120
+          poll: 0
+          register: snapshot_jobs
+
+        - name: Wait for snapshots to complete
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ snapshot_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: snapshot_results
+          until: snapshot_results.finished
+          retries: 24
+          delay: 5
+          when: item.ansible_job_id is defined
+
+        - name: Start VMs after snapshot (async)
+          ansible.builtin.command:
+            cmd: virsh start "{{ item.name }}"
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 60
+          poll: 0
+          register: final_start_jobs
+          when: start_after_snapshot | default(true)
+
+        - name: Wait for final VM starts
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ final_start_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: final_start_results
+          until: final_start_results.finished
+          retries: 12
+          delay: 5
+          when: 
+            - start_after_snapshot | default(true)
+            - item.ansible_job_id is defined
+
+    # =========================================================================
+    # PHASE 7: Cleanup and summary
+    # =========================================================================
+    - name: "PHASE 7: Cleanup"
+      block:
+        - name: Restart template VM if it was running before
+          ansible.builtin.command:
+            cmd: virsh start "{{ template_vm }}"
+          when: 
+            - template_state.stdout == "running"
+            - restart_template_after | default(false)
+          register: restart_result
+          changed_when: restart_result.rc == 0
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ✅ VM Cloning Complete!
+          Created {{ vms_to_create | length }} VMs:
+          {% for vm in vms_to_create %}
+            - {{ vm.name }}: {{ vm.ip }} ({{ vm.vcpu }} vCPU, {{ vm.ram_mb }}MB RAM) [snapshot: {{ snapshot_name }}]
+          {% endfor %}

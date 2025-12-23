@@ -4,6 +4,7 @@ Ansible playbook to clone Debian 12 VMs from a template on a KVM hypervisor.
 
 ## Features
 
+- **Parallel execution** - All operations run concurrently for maximum speed
 - Clones VMs from a template using `virt-clone`
 - Pre-boot customization with `virt-customize`:
   - Sets hostname
@@ -11,7 +12,8 @@ Ansible playbook to clone Debian 12 VMs from a template on a KVM hypervisor.
   - Regenerates `/etc/machine-id` (avoids duplicate machine IDs)
   - Regenerates SSH host keys (avoids SSH key conflicts)
 - Configures vCPU and RAM per VM
-- Waits for SSH availability before continuing
+- **Creates snapshot** (`snapshot-a`) on each clone for easy rollback
+- Waits for SSH availability
 - Idempotent: skips VMs that already exist
 
 ## Prerequisites
@@ -31,11 +33,10 @@ On the control node (Selene):
 kvm-clone-ansible/
 ├── ansible.cfg           # Ansible configuration
 ├── inventory.ini         # Hypervisor connection details
-├── clone-vms.yml         # Main playbook
-├── vars/
-│   └── vms.yml           # VM definitions (edit this!)
-└── tasks/
-    └── clone-single-vm.yml
+├── clone-vms.yml         # Main playbook (parallel)
+├── cleanup-vms.yml       # Remove cloned VMs
+└── vars/
+    └── vms.yml           # ← Edit this to define your VMs
 ```
 
 ## Usage
@@ -66,8 +67,11 @@ ansible-playbook clone-vms.yml --check
 # Full run
 ansible-playbook clone-vms.yml
 
-# Clone only specific VMs (by name)
+# Clone specific VMs only (override vars)
 ansible-playbook clone-vms.yml -e '{"vms": [{"name": "test-vm", "ip": "192.168.32.50", "vcpu": 1, "ram_mb": 1024}]}'
+
+# Skip snapshot creation
+ansible-playbook clone-vms.yml -e create_snapshot=false
 ```
 
 ### 3. Connect to your VMs
@@ -75,6 +79,21 @@ ansible-playbook clone-vms.yml -e '{"vms": [{"name": "test-vm", "ip": "192.168.3
 ```bash
 ssh qwerty@192.168.32.10
 ```
+
+## Execution Phases
+
+The playbook runs in 7 phases (most run in parallel):
+
+| Phase | Operation | Parallel |
+|-------|-----------|----------|
+| 0 | Pre-flight checks, build VM list | - |
+| 1 | Clone VMs with `virt-clone` | ❌ (storage pool locks) |
+| 2 | Customize disks (`virt-customize`) | ✅ |
+| 3 | Configure resources (vCPU/RAM) | ✅ |
+| 4 | Start VMs | ✅ |
+| 5 | Wait for SSH | ✅ |
+| 6 | Create snapshots | ✅ |
+| 7 | Cleanup and summary | - |
 
 ## Configuration Options
 
@@ -88,16 +107,12 @@ In `vars/vms.yml`:
 | `network_prefix` | Subnet prefix (CIDR) | `24` |
 | `network_gateway` | Gateway IP | `192.168.32.1` |
 | `dns_servers` | DNS servers | `8.8.8.8` |
+| `create_snapshot` | Create snapshot after cloning | `true` |
+| `snapshot_name` | Name of the snapshot | `snapshot-a` |
+| `snapshot_description` | Snapshot description | `initial configuration` |
+| `start_after_snapshot` | Start VMs after snapshot | `true` |
 | `restart_template_after` | Restart template after cloning | `false` |
-| `wait_for_ssh` | Wait for SSH before next VM | `true` |
-
-## Cleanup
-
-To remove a cloned VM:
-
-```bash
-ssh Silenus "virsh destroy vm-name; virsh undefine vm-name --remove-all-storage"
-```
+| `wait_for_ssh` | Wait for SSH before continuing | `true` |
 
 ## Useful Aliases
 
@@ -118,6 +133,23 @@ alias restore-restart-vms='for vm in $(virsh list --name --state-running | grep 
 alias restore-stop-vms='for vm in $(virsh list --name --state-running | grep -v "^debian-bookworm$"); do virsh snapshot-revert "$vm" --current; done'
 ```
 
+## Cleanup
+
+To remove cloned VMs:
+
+```bash
+# Dry run (see what would be deleted)
+ansible-playbook cleanup-vms.yml
+
+# Actually delete
+ansible-playbook cleanup-vms.yml -e confirm_delete=true
+```
+
+Or manually:
+```bash
+ssh Silenus "virsh destroy vm-name; virsh undefine vm-name --remove-all-storage --snapshots-metadata"
+```
+
 ## Troubleshooting
 
 ### VM stuck at old IP
@@ -131,3 +163,7 @@ Ensure `libguestfs-tools` is installed on the hypervisor:
 ```bash
 apt install libguestfs-tools
 ```
+
+### Snapshot revert doesn't restore IP
+This is expected! Each clone's `snapshot-a` contains its own hostname/IP, not the template's.
+Reverting restores the clone to its initial customized state.

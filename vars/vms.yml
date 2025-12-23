@@ -17,6 +17,14 @@ network_gateway: "192.168.32.1"
 dns_servers: "8.8.8.8"
 
 # -------------------------------------------------------------------------
+# Snapshot configuration
+# -------------------------------------------------------------------------
+create_snapshot: true                      # Create snapshot after cloning
+snapshot_name: "snapshot-a"                # Name of snapshot (matches template)
+snapshot_description: "initial configuration"
+start_after_snapshot: true                 # Start VMs after creating snapshot
+
+# -------------------------------------------------------------------------
 # Behavior options
 # -------------------------------------------------------------------------
 restart_template_after: false   # Start template VM after cloning is complete

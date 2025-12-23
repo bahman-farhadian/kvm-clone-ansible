@@ -1,7 +1,7 @@
 ---
 # Cleanup playbook - removes cloned VMs
-# Usage: ansible-playbook cleanup-vms.yml
-# WARNING: This will destroy VMs and delete their disk images!
+# Usage: ansible-playbook cleanup-vms.yml -e confirm_delete=true
+# WARNING: This will destroy VMs, delete snapshots, and delete disk images!
 
 - name: Remove cloned VMs
   hosts: hypervisor
@@ -22,9 +22,124 @@
           To actually delete VMs, run with: -e confirm_delete=true
       when: not confirm_delete
 
-    - name: Process each VM
-      ansible.builtin.include_tasks: tasks/cleanup-single-vm.yml
+    - name: Check which VMs exist
+      ansible.builtin.command:
+        cmd: virsh dominfo "{{ item.name }}"
       loop: "{{ vms }}"
       loop_control:
-        loop_var: vm
-        label: "{{ vm.name }}"
+        label: "{{ item.name }}"
+      register: vm_exists_check
+      failed_when: false
+      changed_when: false
+
+    - name: Build list of VMs to delete
+      ansible.builtin.set_fact:
+        vms_to_delete: >-
+          {{ vms | zip(vm_exists_check.results) 
+             | selectattr('1.rc', 'eq', 0) 
+             | map(attribute='0') 
+             | list }}
+
+    - name: Show VMs that would be deleted (dry run)
+      ansible.builtin.debug:
+        msg: "Would delete: {{ vms_to_delete | map(attribute='name') | join(', ') }}"
+      when: 
+        - not confirm_delete
+        - vms_to_delete | length > 0
+
+    - name: No VMs to delete
+      ansible.builtin.debug:
+        msg: "No VMs found to delete"
+      when: vms_to_delete | length == 0
+
+    - name: Delete VMs
+      when: 
+        - confirm_delete
+        - vms_to_delete | length > 0
+      block:
+        - name: Get VM states
+          ansible.builtin.command:
+            cmd: virsh domstate "{{ item.name }}"
+          loop: "{{ vms_to_delete }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: vm_states
+          changed_when: false
+
+        - name: Force stop running VMs (async)
+          ansible.builtin.command:
+            cmd: virsh destroy "{{ item.item.name }}"
+          loop: "{{ vm_states.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          when: item.stdout == "running"
+          async: 30
+          poll: 0
+          register: destroy_jobs
+          failed_when: false
+
+        - name: Wait for VMs to stop
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ destroy_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.item.name }}"
+          register: destroy_results
+          until: destroy_results.finished
+          retries: 10
+          delay: 3
+          when: item.ansible_job_id is defined
+
+        - name: Delete snapshots (async)
+          ansible.builtin.shell: |
+            for snap in $(virsh snapshot-list "{{ item.name }}" --name 2>/dev/null); do
+              virsh snapshot-delete "{{ item.name }}" "$snap" 2>/dev/null || true
+            done
+          loop: "{{ vms_to_delete }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 60
+          poll: 0
+          register: snapshot_delete_jobs
+
+        - name: Wait for snapshot deletions
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ snapshot_delete_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: snapshot_delete_results
+          until: snapshot_delete_results.finished
+          retries: 12
+          delay: 5
+          when: item.ansible_job_id is defined
+
+        - name: Undefine VMs and remove storage (async)
+          ansible.builtin.command:
+            cmd: virsh undefine "{{ item.name }}" --remove-all-storage --snapshots-metadata
+          loop: "{{ vms_to_delete }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: 120
+          poll: 0
+          register: undefine_jobs
+
+        - name: Wait for VM deletions
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ undefine_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: undefine_results
+          until: undefine_results.finished
+          retries: 24
+          delay: 5
+          when: item.ansible_job_id is defined
+
+        - name: Cleanup complete
+          ansible.builtin.debug:
+            msg: |
+              ✅ Deleted {{ vms_to_delete | length }} VMs:
+              {% for vm in vms_to_delete %}
+                - {{ vm.name }}
+              {% endfor %}
