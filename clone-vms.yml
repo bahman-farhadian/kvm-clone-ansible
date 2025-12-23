@@ -1,0 +1,66 @@
+---
+# KVM VM Cloning Playbook
+# Clones a template VM and customizes each clone with unique hostname, IP, and resources
+
+- name: Clone and provision KVM virtual machines
+  hosts: hypervisor
+  gather_facts: false
+  
+  vars_files:
+    - vars/vms.yml
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Pre-flight checks
+    # -------------------------------------------------------------------------
+    - name: Ensure template VM exists
+      ansible.builtin.command:
+        cmd: virsh dominfo "{{ template_vm }}"
+      register: template_check
+      changed_when: false
+      failed_when: template_check.rc != 0
+
+    - name: Check template VM state
+      ansible.builtin.command:
+        cmd: virsh domstate "{{ template_vm }}"
+      register: template_state
+      changed_when: false
+
+    - name: Shut down template VM if running
+      ansible.builtin.command:
+        cmd: virsh shutdown "{{ template_vm }}"
+      when: template_state.stdout == "running"
+      register: shutdown_result
+      changed_when: shutdown_result.rc == 0
+
+    - name: Wait for template VM to shut down
+      ansible.builtin.command:
+        cmd: virsh domstate "{{ template_vm }}"
+      register: template_state_check
+      until: template_state_check.stdout == "shut off"
+      retries: 30
+      delay: 2
+      when: template_state.stdout == "running"
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Clone VMs
+    # -------------------------------------------------------------------------
+    - name: Clone VMs from template
+      ansible.builtin.include_tasks: tasks/clone-single-vm.yml
+      loop: "{{ vms }}"
+      loop_control:
+        loop_var: vm
+        label: "{{ vm.name }}"
+
+    # -------------------------------------------------------------------------
+    # Optionally restart template
+    # -------------------------------------------------------------------------
+    - name: Restart template VM if it was running before
+      ansible.builtin.command:
+        cmd: virsh start "{{ template_vm }}"
+      when: 
+        - template_state.stdout == "running"
+        - restart_template_after | default(false)
+      register: restart_result
+      changed_when: restart_result.rc == 0

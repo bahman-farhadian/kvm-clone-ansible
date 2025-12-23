@@ -1,0 +1,50 @@
+---
+# Cleanup tasks for a single VM
+
+- name: "{{ vm.name }} - Check if VM exists"
+  ansible.builtin.command:
+    cmd: virsh dominfo "{{ vm.name }}"
+  register: vm_exists
+  failed_when: false
+  changed_when: false
+
+- name: "{{ vm.name }} - VM does not exist"
+  ansible.builtin.debug:
+    msg: "VM {{ vm.name }} does not exist, skipping"
+  when: vm_exists.rc != 0
+
+- name: "{{ vm.name }} - Would delete VM (dry run)"
+  ansible.builtin.debug:
+    msg: "Would delete VM {{ vm.name }} and disk {{ disk_pool }}/{{ vm.name }}.qcow2"
+  when: 
+    - vm_exists.rc == 0
+    - not confirm_delete
+
+- name: "{{ vm.name }} - Delete VM and storage"
+  when: 
+    - vm_exists.rc == 0
+    - confirm_delete
+  block:
+    - name: "{{ vm.name }} - Check VM state"
+      ansible.builtin.command:
+        cmd: virsh domstate "{{ vm.name }}"
+      register: vm_state
+      changed_when: false
+
+    - name: "{{ vm.name }} - Force stop VM if running"
+      ansible.builtin.command:
+        cmd: virsh destroy "{{ vm.name }}"
+      when: vm_state.stdout == "running"
+      register: destroy_result
+      changed_when: destroy_result.rc == 0
+      failed_when: false
+
+    - name: "{{ vm.name }} - Undefine VM and remove storage"
+      ansible.builtin.command:
+        cmd: virsh undefine "{{ vm.name }}" --remove-all-storage
+      register: undefine_result
+      changed_when: undefine_result.rc == 0
+
+    - name: "{{ vm.name }} - VM deleted"
+      ansible.builtin.debug:
+        msg: "Successfully deleted VM {{ vm.name }}"

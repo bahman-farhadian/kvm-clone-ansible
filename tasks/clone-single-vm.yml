@@ -1,0 +1,114 @@
+---
+# Tasks to clone a single VM from template
+# Called from clone-vms.yml with 'vm' variable
+
+- name: "{{ vm.name }} - Check if VM already exists"
+  ansible.builtin.command:
+    cmd: virsh dominfo "{{ vm.name }}"
+  register: vm_exists
+  failed_when: false
+  changed_when: false
+
+- name: "{{ vm.name }} - Skip if VM already exists"
+  ansible.builtin.debug:
+    msg: "VM {{ vm.name }} already exists, skipping clone"
+  when: vm_exists.rc == 0
+
+- name: "{{ vm.name }} - Clone and configure VM"
+  when: vm_exists.rc != 0
+  block:
+    # -------------------------------------------------------------------------
+    # Clone the VM using virt-clone
+    # -------------------------------------------------------------------------
+    - name: "{{ vm.name }} - Clone VM from template"
+      ansible.builtin.command:
+        cmd: >
+          virt-clone
+          --original "{{ template_vm }}"
+          --name "{{ vm.name }}"
+          --file "{{ disk_pool }}/{{ vm.name }}.qcow2"
+          --check path_in_use=off
+      register: clone_result
+      changed_when: clone_result.rc == 0
+
+    # -------------------------------------------------------------------------
+    # Customize the disk image before first boot
+    # -------------------------------------------------------------------------
+    - name: "{{ vm.name }} - Prepare network interfaces content"
+      ansible.builtin.set_fact:
+        interfaces_content: |
+          # This file describes the network interfaces available on your system
+          # and how to activate them. For more information, see interfaces(5).
+          source /etc/network/interfaces.d/*
+          # The loopback network interface
+          auto lo
+          iface lo inet loopback
+          # The primary network interface
+          allow-hotplug {{ guest_interface }}
+          iface {{ guest_interface }} inet static
+                  address {{ vm.ip }}/{{ network_prefix }}
+                  gateway {{ network_gateway }}
+                  dns-nameservers {{ dns_servers }}
+
+    - name: "{{ vm.name }} - Customize disk image (hostname, IP, machine-id, SSH keys)"
+      ansible.builtin.command:
+        cmd: >
+          virt-customize
+          -a "{{ disk_pool }}/{{ vm.name }}.qcow2"
+          --hostname "{{ vm.name }}"
+          --write "/etc/network/interfaces:{{ interfaces_content }}"
+          --truncate /etc/machine-id
+          --run-command "rm -f /etc/ssh/ssh_host_*"
+          --run-command "dpkg-reconfigure -f noninteractive openssh-server"
+      register: customize_result
+      changed_when: customize_result.rc == 0
+
+    # -------------------------------------------------------------------------
+    # Adjust VM resources (vCPU, RAM)
+    # -------------------------------------------------------------------------
+    - name: "{{ vm.name }} - Set maximum memory"
+      ansible.builtin.command:
+        cmd: virsh setmaxmem "{{ vm.name }}" "{{ vm.ram_mb }}M" --config
+      register: maxmem_result
+      changed_when: maxmem_result.rc == 0
+
+    - name: "{{ vm.name }} - Set current memory"
+      ansible.builtin.command:
+        cmd: virsh setmem "{{ vm.name }}" "{{ vm.ram_mb }}M" --config
+      register: mem_result
+      changed_when: mem_result.rc == 0
+
+    - name: "{{ vm.name }} - Set vCPU count"
+      ansible.builtin.command:
+        cmd: virsh setvcpus "{{ vm.name }}" "{{ vm.vcpu }}" --config --maximum
+      register: vcpu_max_result
+      changed_when: vcpu_max_result.rc == 0
+
+    - name: "{{ vm.name }} - Set current vCPU count"
+      ansible.builtin.command:
+        cmd: virsh setvcpus "{{ vm.name }}" "{{ vm.vcpu }}" --config
+      register: vcpu_result
+      changed_when: vcpu_result.rc == 0
+
+    # -------------------------------------------------------------------------
+    # Start the VM
+    # -------------------------------------------------------------------------
+    - name: "{{ vm.name }} - Start VM"
+      ansible.builtin.command:
+        cmd: virsh start "{{ vm.name }}"
+      register: start_result
+      changed_when: start_result.rc == 0
+
+    - name: "{{ vm.name }} - Wait for VM to be reachable via SSH"
+      ansible.builtin.wait_for:
+        host: "{{ vm.ip }}"
+        port: 22
+        delay: 10
+        timeout: 120
+        state: started
+      when: wait_for_ssh | default(true)
+
+- name: "{{ vm.name }} - VM provisioning complete"
+  ansible.builtin.debug:
+    msg: "VM {{ vm.name }} is ready at {{ vm.ip }}"
+  when: vm_exists.rc != 0

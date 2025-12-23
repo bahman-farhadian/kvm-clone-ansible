@@ -1,0 +1,61 @@
+---
+# VM Clone Configuration
+# Edit this file to define your VMs
+
+# -------------------------------------------------------------------------
+# Template and storage configuration
+# -------------------------------------------------------------------------
+template_vm: "debian-bookworm"
+disk_pool: "/btbssd/QEMUKVM/stgPool"
+
+# -------------------------------------------------------------------------
+# Network configuration (applied to all VMs)
+# -------------------------------------------------------------------------
+guest_interface: "enp1s0"
+network_prefix: "24"
+network_gateway: "192.168.32.1"
+dns_servers: "8.8.8.8"
+
+# -------------------------------------------------------------------------
+# Behavior options
+# -------------------------------------------------------------------------
+restart_template_after: false   # Start template VM after cloning is complete
+wait_for_ssh: true              # Wait for each VM to be reachable before continuing
+
+# -------------------------------------------------------------------------
+# VM Definitions
+# -------------------------------------------------------------------------
+# Define your VMs here. Each VM needs:
+#   - name: hostname and VM name (used for disk file too)
+#   - ip: static IP address
+#   - vcpu: number of virtual CPUs
+#   - ram_mb: RAM in megabytes
+
+vms:
+  - name: "web-server-01"
+    ip: "192.168.32.10"
+    vcpu: 2
+    ram_mb: 2048
+
+  - name: "db-server-01"
+    ip: "192.168.32.11"
+    vcpu: 4
+    ram_mb: 4096
+
+  - name: "app-server-01"
+    ip: "192.168.32.12"
+    vcpu: 2
+    ram_mb: 2048
+
+# -------------------------------------------------------------------------
+# Example: Add more VMs by copying the format above
+# -------------------------------------------------------------------------
+#   - name: "worker-01"
+#     ip: "192.168.32.20"
+#     vcpu: 2
+#     ram_mb: 1024
+#
+#   - name: "worker-02"
+#     ip: "192.168.32.21"
+#     vcpu: 2
+#     ram_mb: 1024

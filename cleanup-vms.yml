@@ -1,0 +1,30 @@
+---
+# Cleanup playbook - removes cloned VMs
+# Usage: ansible-playbook cleanup-vms.yml
+# WARNING: This will destroy VMs and delete their disk images!
+
+- name: Remove cloned VMs
+  hosts: hypervisor
+  gather_facts: false
+  
+  vars_files:
+    - vars/vms.yml
+
+  vars:
+    # Set to true to actually delete, false for dry-run
+    confirm_delete: false
+
+  tasks:
+    - name: WARNING - Dry run mode
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  DRY RUN MODE - No VMs will be deleted.
+          To actually delete VMs, run with: -e confirm_delete=true
+      when: not confirm_delete
+
+    - name: Process each VM
+      ansible.builtin.include_tasks: tasks/cleanup-single-vm.yml
+      loop: "{{ vms }}"
+      loop_control:
+        loop_var: vm
+        label: "{{ vm.name }}"
