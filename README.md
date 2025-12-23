@@ -99,6 +99,25 @@ To remove a cloned VM:
 ssh Silenus "virsh destroy vm-name; virsh undefine vm-name --remove-all-storage"
 ```
 
+## Useful Aliases
+
+Add these to your shell profile on the hypervisor (e.g., `~/.bashrc` or `~/.zshrc`).
+They exclude the `debian-bookworm` template VM:
+
+```bash
+# Start all VMs except template
+alias start-vms='for vm in $(virsh list --name --inactive | grep -v "^debian-bookworm$"); do virsh start "$vm"; done'
+
+# Graceful shutdown all VMs except template
+alias stop-vms='for vm in $(virsh list --name --state-running | grep -v "^debian-bookworm$"); do virsh shutdown "$vm"; done'
+
+# Revert to current snapshot and restart (excludes template)
+alias restore-restart-vms='for vm in $(virsh list --name --state-running | grep -v "^debian-bookworm$"); do virsh snapshot-revert "$vm" --current && virsh start "$vm"; done'
+
+# Revert to current snapshot without starting (excludes template)
+alias restore-stop-vms='for vm in $(virsh list --name --state-running | grep -v "^debian-bookworm$"); do virsh snapshot-revert "$vm" --current; done'
+```
+
 ## Troubleshooting
 
 ### VM stuck at old IP
