@@ -8,7 +8,7 @@
 # SSH hostname or user@ip of your KVM hypervisor
 # Examples:
 #   kvm_host: "Silenus"                    # SSH config name
-#   kvm_host: "root@192.168.48.2"         # Direct IP with user
+#   kvm_host: "root@192.168.48.12"         # Direct IP with user
 #   kvm_host: "admin@kvm.example.com"      # FQDN with user
 kvm_host: "Silenus"
 
