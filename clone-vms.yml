@@ -3,6 +3,20 @@
 # Clones template VM and customizes each clone with unique hostname, IP, and resources
 # All operations run in parallel for maximum speed
 
+- name: Setup KVM host
+  hosts: localhost
+  gather_facts: false
+  
+  vars_files:
+    - vars/vms.yml
+
+  tasks:
+    - name: Add KVM hypervisor to inventory
+      ansible.builtin.add_host:
+        name: "{{ kvm_host }}"
+        groups: hypervisor
+        ansible_python_interpreter: /usr/bin/python3
+
 - name: Clone and provision KVM virtual machines
   hosts: hypervisor
   gather_facts: false

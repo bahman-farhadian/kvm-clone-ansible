@@ -3,6 +3,20 @@
 # Usage: ansible-playbook cleanup-vms.yml -e confirm_delete=true
 # WARNING: This will destroy VMs, delete snapshots, and delete disk images!
 
+- name: Setup KVM host
+  hosts: localhost
+  gather_facts: false
+  
+  vars_files:
+    - vars/vms.yml
+
+  tasks:
+    - name: Add KVM hypervisor to inventory
+      ansible.builtin.add_host:
+        name: "{{ kvm_host }}"
+        groups: hypervisor
+        ansible_python_interpreter: /usr/bin/python3
+
 - name: Remove cloned VMs
   hosts: hypervisor
   gather_facts: false

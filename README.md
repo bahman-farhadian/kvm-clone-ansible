@@ -99,6 +99,14 @@ The playbook runs in 7 phases (most run in parallel):
 
 In `vars/vms.yml`:
 
+### Hypervisor Connection
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `kvm_host` | SSH hostname or user@ip of KVM hypervisor | `Silenus`, `root@192.168.24.12` |
+
+### Template and Storage
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `template_vm` | Name of the template VM | `debian-bookworm` |
