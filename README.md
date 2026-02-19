@@ -5,7 +5,7 @@ Ansible playbook to clone Debian 12 VMs from a template on a KVM hypervisor.
 ## Features
 
 - **Parallel execution** - All operations run concurrently for maximum speed
-- Clones VMs from a template using `virt-clone` (parallel)
+- Clones VMs from a template using `virt-clone` (`clone_mode`: `auto`, `sequential`, `parallel`)
 - Pre-boot customization with `virt-customize`
 - Sets hostname
 - Configures static IP address
@@ -175,7 +175,7 @@ The playbook runs in 7 phases (most run in parallel):
 | Phase | Operation | Parallel |
 |-------|-----------|----------|
 | 0 | Pre-flight checks, build VM list | - |
-| 1 | Clone VMs with `virt-clone` | ✅ |
+| 1 | Clone VMs with `virt-clone` | Configurable (`clone_mode`) |
 | 2 | Customize disks (`virt-customize`) | ✅ |
 | 3 | Configure resources (vCPU/RAM) | ✅ |
 | 4 | Start VMs | ✅ |
@@ -211,6 +211,7 @@ In `vars/vms.yml`:
 | `restart_template_after` | Restart template after cloning | `false` |
 | `wait_for_ssh` | Wait for SSH before continuing | `true` |
 | `confirm_delete` | Allow destructive cleanup in `cleanup-vms.yml` | `false` |
+| `clone_mode` | Clone behavior: `auto`, `sequential`, `parallel` | `auto` |
 | `clone_async_timeout_sec` | Timeout per `virt-clone` job (seconds) | `1800` |
 | `clone_wait_retries` | Poll retry count while waiting for clone jobs | `180` |
 | `clone_wait_delay_sec` | Poll delay between clone status checks (seconds) | `10` |
@@ -277,6 +278,16 @@ Then run again:
 ansible-playbook clone-vms.yml --check
 ansible-playbook clone-vms.yml
 ```
+
+### `virt-clone` fails with `pool '<name>' has asynchronous jobs running`
+Your libvirt storage pool does not allow concurrent clone jobs.
+Set this in `vars/vms.yml`:
+```yaml
+clone_mode: "auto"
+```
+`auto` first tries parallel clone jobs, then retries only pool-locked VMs sequentially.
+Use `clone_mode: "parallel"` only if your pool supports concurrent jobs.
+Use `clone_mode: "sequential"` for strict predictability.
 
 ### Snapshot revert doesn't restore IP
 This is expected! Each clone's `snapshot-a` contains its own hostname/IP, not the template's.

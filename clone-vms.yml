@@ -103,10 +103,34 @@
       when: vms_to_create | length == 0
 
     # =========================================================================
-    # PHASE 1: Clone VMs with virt-clone (parallel)
+    # PHASE 1: Clone VMs with virt-clone
+    # clone_mode:
+    #   - sequential: safest, no pool concurrency issues
+    #   - parallel: fastest when pool supports concurrent jobs
+    #   - auto: try parallel, then retry only pool-lock failures sequentially
     # =========================================================================
-    - name: "PHASE 1: Clone VMs (parallel)"
-      when: vms_to_create | length > 0
+    - name: "PHASE 1A: Clone VMs (sequential)"
+      when:
+        - vms_to_create | length > 0
+        - (clone_mode | default('auto')) == 'sequential'
+      block:
+        - name: Clone VMs from template (sequential)
+          ansible.builtin.command:
+            cmd: >
+              virt-clone
+              --original "{{ template_vm }}"
+              --name "{{ item.name }}"
+              --file "{{ disk_pool }}/{{ item.name }}.qcow2"
+              --check path_in_use=off
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: clone_results
+
+    - name: "PHASE 1B: Clone VMs (parallel)"
+      when:
+        - vms_to_create | length > 0
+        - (clone_mode | default('auto')) == 'parallel'
       block:
         - name: Clone VMs from template (async)
           ansible.builtin.command:
@@ -134,6 +158,80 @@
           retries: "{{ clone_wait_retries | default(180) }}"
           delay: "{{ clone_wait_delay_sec | default(10) }}"
           when: item.ansible_job_id is defined
+
+    - name: "PHASE 1C: Clone VMs (auto: parallel + fallback)"
+      when:
+        - vms_to_create | length > 0
+        - (clone_mode | default('auto')) == 'auto'
+      block:
+        - name: Clone VMs from template (async attempt)
+          ansible.builtin.command:
+            cmd: >
+              virt-clone
+              --original "{{ template_vm }}"
+              --name "{{ item.name }}"
+              --file "{{ disk_pool }}/{{ item.name }}.qcow2"
+              --check path_in_use=off
+          loop: "{{ vms_to_create }}"
+          loop_control:
+            label: "{{ item.name }}"
+          async: "{{ clone_async_timeout_sec | default(1800) }}"
+          poll: 0
+          register: clone_jobs
+
+        - name: Collect clone operation results
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ clone_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          register: clone_results
+          until: clone_results.finished
+          retries: "{{ clone_wait_retries | default(180) }}"
+          delay: "{{ clone_wait_delay_sec | default(10) }}"
+          when: item.ansible_job_id is defined
+          failed_when: false
+
+        - name: Build fallback and failure clone lists
+          ansible.builtin.set_fact:
+            clone_pool_locked_vms: >-
+              {{
+                clone_results.results
+                | selectattr('rc', 'defined')
+                | selectattr('rc', 'ne', 0)
+                | selectattr('stderr', 'search', 'asynchronous jobs running')
+                | map(attribute='item.item')
+                | list
+              }}
+            clone_hard_failures: >-
+              {{
+                clone_results.results
+                | selectattr('rc', 'defined')
+                | selectattr('rc', 'ne', 0)
+                | rejectattr('stderr', 'search', 'asynchronous jobs running')
+                | list
+              }}
+
+        - name: Fail on non-recoverable clone errors
+          ansible.builtin.fail:
+            msg: >-
+              Clone failed for {{ clone_hard_failures | length }} VM(s) with non pool-lock errors.
+              First error: {{ (clone_hard_failures | first).stderr | default((clone_hard_failures | first).msg | default('unknown error')) }}
+          when: clone_hard_failures | length > 0
+
+        - name: Retry pool-locked VMs sequentially
+          ansible.builtin.command:
+            cmd: >
+              virt-clone
+              --original "{{ template_vm }}"
+              --name "{{ item.name }}"
+              --file "{{ disk_pool }}/{{ item.name }}.qcow2"
+              --check path_in_use=off
+          loop: "{{ clone_pool_locked_vms | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: clone_fallback_results
+          when: clone_pool_locked_vms | length > 0
 
     # =========================================================================
     # PHASE 2: Customize disk images (parallel)

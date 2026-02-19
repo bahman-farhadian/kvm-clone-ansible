@@ -47,6 +47,7 @@ start_after_snapshot: true                 # Start VMs after creating snapshot
 restart_template_after: false   # Start template VM after cloning is complete
 wait_for_ssh: true              # Wait for each VM to be reachable before continuing
 confirm_delete: false           # cleanup-vms.yml safety flag (keep false by default)
+clone_mode: "auto"              # auto | sequential | parallel
 clone_async_timeout_sec: 1800   # Max seconds allowed for each virt-clone job
 clone_wait_retries: 180         # Poll attempts while waiting for clone jobs
 clone_wait_delay_sec: 10        # Delay between poll attempts (seconds)
