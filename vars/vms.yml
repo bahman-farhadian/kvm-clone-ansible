@@ -1,6 +1,7 @@
 ---
 # VM Clone Configuration
-# Edit this file to define your VMs and hypervisor settings
+# Edit only this file to configure clone and cleanup behavior.
+# This is the single source of user-editable variables for this project.
 
 # -------------------------------------------------------------------------
 # Hypervisor connection
@@ -11,6 +12,7 @@
 #   kvm_host: "root@192.168.48.12"         # Direct IP with user
 #   kvm_host: "admin@kvm.example.com"      # FQDN with user
 kvm_host: "Silenus"
+hypervisor_python_interpreter: "/usr/bin/python3"
 
 # -------------------------------------------------------------------------
 # Template and storage configuration
@@ -39,6 +41,7 @@ start_after_snapshot: true                 # Start VMs after creating snapshot
 # -------------------------------------------------------------------------
 restart_template_after: false   # Start template VM after cloning is complete
 wait_for_ssh: true              # Wait for each VM to be reachable before continuing
+confirm_delete: false           # cleanup-vms.yml safety flag (keep false by default)
 
 # -------------------------------------------------------------------------
 # VM Definitions
@@ -48,6 +51,22 @@ wait_for_ssh: true              # Wait for each VM to be reachable before contin
 #   - ip: static IP address
 #   - vcpu: number of virtual CPUs
 #   - ram_mb: RAM in megabytes
+#
+# Example minimal entry:
+#   - name: "test-vm-01"
+#     ip: "192.168.32.50"
+#     vcpu: 1
+#     ram_mb: 1024
+#
+# Example small lab set:
+#   - name: "lab-web-01"
+#     ip: "192.168.32.21"
+#     vcpu: 2
+#     ram_mb: 2048
+#   - name: "lab-db-01"
+#     ip: "192.168.32.22"
+#     vcpu: 4
+#     ram_mb: 4096
 
 vms:
   - name: "web-server-01"

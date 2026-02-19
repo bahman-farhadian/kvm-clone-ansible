@@ -15,7 +15,7 @@
       ansible.builtin.add_host:
         name: "{{ kvm_host }}"
         groups: hypervisor
-        ansible_python_interpreter: /usr/bin/python3
+        ansible_python_interpreter: "{{ hypervisor_python_interpreter }}"
 
 - name: Remove cloned VMs
   hosts: hypervisor
@@ -23,10 +23,6 @@
   
   vars_files:
     - vars/vms.yml
-
-  vars:
-    # Set to true to actually delete, false for dry-run
-    confirm_delete: false
 
   tasks:
     - name: WARNING - Dry run mode

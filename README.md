@@ -23,9 +23,35 @@ On the hypervisor (Silenus):
 - `libguestfs-tools` installed (provides `virt-customize`)
 - Template VM created and working
 
-On the control node (Selene):
-- Ansible installed
-- SSH key access to hypervisor as root
+On the control node (any Linux host):
+- Python 3.10+ (or compatible Python 3)
+- SSH key access to hypervisor as root (or a user with required libvirt permissions)
+- A local Python virtual environment for this project (recommended and documented below)
+
+## Control Node Setup (Version-Pinned venv)
+
+Use a project-local virtual environment so this repo does not depend on the system-wide Ansible version.
+
+```bash
+cd kvm-clone-ansible
+
+# Create and activate a local virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Upgrade pip and install a pinned Ansible version
+python -m pip install --upgrade pip
+python -m pip install "ansible-core==2.16.14"
+
+# Verify toolchain from the venv
+ansible --version
+ansible-playbook --version
+```
+
+Notes:
+- Keep the venv activated while running playbooks from this repository.
+- If you open a new shell, run `source .venv/bin/activate` again.
+- To remove the environment later: `rm -rf .venv`
 
 ## Directory Structure
 
@@ -36,14 +62,21 @@ kvm-clone-ansible/
 ├── clone-vms.yml         # Main playbook (parallel)
 ├── cleanup-vms.yml       # Remove cloned VMs
 └── vars/
-    └── vms.yml           # ← Edit this to define your VMs
+    └── vms.yml           # ← Edit this file only (all user variables)
 ```
 
 ## Usage
 
-### 1. Edit VM definitions
+### 1. Edit one file only: `vars/vms.yml`
 
-Edit `vars/vms.yml` to define your VMs:
+All user-editable settings live in `vars/vms.yml`:
+- Hypervisor target (`kvm_host`)
+- Template/storage/network settings
+- Clone behavior flags (snapshot, SSH wait, template restart)
+- Cleanup safety flag (`confirm_delete`)
+- VM list (`vms`)
+
+Example:
 
 ```yaml
 vms:
@@ -58,7 +91,7 @@ vms:
     ram_mb: 4096
 ```
 
-### 2. Run the playbook
+### 2. Run the playbook (from activated venv)
 
 ```bash
 # Dry run (check mode)
@@ -72,6 +105,40 @@ ansible-playbook clone-vms.yml -e '{"vms": [{"name": "test-vm", "ip": "192.168.3
 
 # Skip snapshot creation
 ansible-playbook clone-vms.yml -e create_snapshot=false
+```
+
+## Possible Commands
+
+Run from the project root with the venv activated:
+
+```bash
+# Activate local environment
+source .venv/bin/activate
+
+# Validate playbook YAML/syntax
+ansible-playbook clone-vms.yml --syntax-check
+ansible-playbook cleanup-vms.yml --syntax-check
+
+# Preview clone changes (safe dry run)
+ansible-playbook clone-vms.yml --check
+
+# Execute clone workflow
+ansible-playbook clone-vms.yml
+
+# Execute clone for verbose troubleshooting
+ansible-playbook clone-vms.yml -vv
+
+# Override one variable without editing file (example)
+ansible-playbook clone-vms.yml -e wait_for_ssh=false
+
+# Cleanup preview (default because confirm_delete=false in vars/vms.yml)
+ansible-playbook cleanup-vms.yml
+
+# Actual cleanup, option 1: temporary override
+ansible-playbook cleanup-vms.yml -e confirm_delete=true
+
+# Actual cleanup, option 2: set confirm_delete=true in vars/vms.yml, then run
+ansible-playbook cleanup-vms.yml
 ```
 
 ### 3. Connect to your VMs
@@ -104,6 +171,7 @@ In `vars/vms.yml`:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `kvm_host` | SSH hostname or user@ip of KVM hypervisor | `Silenus`, `root@192.168.24.12` |
+| `hypervisor_python_interpreter` | Python path on KVM host for Ansible modules | `/usr/bin/python3` |
 
 ### Template and Storage
 
@@ -121,6 +189,7 @@ In `vars/vms.yml`:
 | `start_after_snapshot` | Start VMs after snapshot | `true` |
 | `restart_template_after` | Restart template after cloning | `false` |
 | `wait_for_ssh` | Wait for SSH before continuing | `true` |
+| `confirm_delete` | Allow destructive cleanup in `cleanup-vms.yml` | `false` |
 
 ## Useful Aliases
 
@@ -146,10 +215,10 @@ alias restore-stop-vms='for vm in $(virsh list --name --state-running | grep -v 
 To remove cloned VMs:
 
 ```bash
-# Dry run (see what would be deleted)
+# Dry run (see what would be deleted; default with confirm_delete=false in vars/vms.yml)
 ansible-playbook cleanup-vms.yml
 
-# Actually delete
+# Actually delete (temporary override)
 ansible-playbook cleanup-vms.yml -e confirm_delete=true
 ```
 

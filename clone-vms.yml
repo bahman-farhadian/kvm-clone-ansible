@@ -15,7 +15,7 @@
       ansible.builtin.add_host:
         name: "{{ kvm_host }}"
         groups: hypervisor
-        ansible_python_interpreter: /usr/bin/python3
+        ansible_python_interpreter: "{{ hypervisor_python_interpreter }}"
 
 - name: Clone and provision KVM virtual machines
   hosts: hypervisor
