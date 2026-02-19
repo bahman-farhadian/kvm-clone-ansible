@@ -11,13 +11,18 @@
 #   kvm_host: "Silenus"                    # SSH config name
 #   kvm_host: "root@192.168.48.12"         # Direct IP with user
 #   kvm_host: "admin@kvm.example.com"      # FQDN with user
-kvm_host: "Silenus"
+kvm_host: "Nyx"
 hypervisor_python_interpreter: "/usr/bin/python3"
 
 # -------------------------------------------------------------------------
 # Template and storage configuration
 # -------------------------------------------------------------------------
 template_vm: "debian-bookworm"
+# Directory must exist on the KVM host (not on the control node).
+# Common values:
+#   /var/lib/libvirt/images
+#   /home/libvirt/images
+#   /btbssd/QEMUKVM/stgPool
 disk_pool: "/btbssd/QEMUKVM/stgPool"
 
 # -------------------------------------------------------------------------

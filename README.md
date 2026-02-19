@@ -6,11 +6,11 @@ Ansible playbook to clone Debian 12 VMs from a template on a KVM hypervisor.
 
 - **Parallel execution** - All operations run concurrently for maximum speed
 - Clones VMs from a template using `virt-clone`
-- Pre-boot customization with `virt-customize`:
-  - Sets hostname
-  - Configures static IP address
-  - Regenerates `/etc/machine-id` (avoids duplicate machine IDs)
-  - Regenerates SSH host keys (avoids SSH key conflicts)
+- Pre-boot customization with `virt-customize`
+- Sets hostname
+- Configures static IP address
+- Regenerates `/etc/machine-id` (avoids duplicate machine IDs)
+- Regenerates SSH host keys (avoids SSH key conflicts)
 - Configures vCPU and RAM per VM
 - **Creates snapshot** (`snapshot-a`) on each clone for easy rollback
 - Waits for SSH availability
@@ -57,12 +57,11 @@ Notes:
 
 ```
 kvm-clone-ansible/
-├── ansible.cfg           # Ansible configuration
-├── inventory.ini         # Hypervisor connection details
-├── clone-vms.yml         # Main playbook (parallel)
-├── cleanup-vms.yml       # Remove cloned VMs
-└── vars/
-    └── vms.yml           # ← Edit this file only (all user variables)
+ansible.cfg
+inventory.ini
+clone-vms.yml
+cleanup-vms.yml
+vars/vms.yml
 ```
 
 ## Usage
@@ -239,6 +238,19 @@ Expected on first connection to a new VM. The playbook regenerates SSH host keys
 Ensure `libguestfs-tools` is installed on the hypervisor:
 ```bash
 apt install libguestfs-tools
+```
+
+### `virt-clone` fails with `cannot open directory ... No such file or directory`
+Your `disk_pool` in `vars/vms.yml` does not exist on the KVM host.
+Find a valid storage path on the hypervisor and update `disk_pool`:
+```bash
+virsh pool-list --all
+virsh pool-dumpxml <pool-name> | grep -oP '(?<=<path>).*?(?=</path>)'
+```
+Then run again:
+```bash
+ansible-playbook clone-vms.yml --check
+ansible-playbook clone-vms.yml
 ```
 
 ### Snapshot revert doesn't restore IP

@@ -41,6 +41,22 @@
       register: template_state
       changed_when: false
 
+    - name: Validate disk pool path exists
+      ansible.builtin.stat:
+        path: "{{ disk_pool }}"
+      register: disk_pool_stat
+      changed_when: false
+
+    - name: Fail if disk pool path is invalid
+      ansible.builtin.fail:
+        msg: |
+          Invalid disk_pool path on hypervisor: {{ disk_pool }}
+          Update `disk_pool` in vars/vms.yml to a real directory on {{ inventory_hostname }}.
+          Useful commands on the hypervisor:
+            virsh pool-list --all
+            virsh pool-dumpxml <pool-name> | grep -oP '(?<=<path>).*?(?=</path>)'
+      when: not disk_pool_stat.stat.exists or not disk_pool_stat.stat.isdir
+
     - name: Shut down template VM if running
       ansible.builtin.command:
         cmd: virsh shutdown "{{ template_vm }}"
