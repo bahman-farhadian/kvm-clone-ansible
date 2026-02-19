@@ -5,7 +5,7 @@ Ansible playbook to clone Debian 12 VMs from a template on a KVM hypervisor.
 ## Features
 
 - **Parallel execution** - All operations run concurrently for maximum speed
-- Clones VMs from a template using `virt-clone`
+- Clones VMs from a template using `virt-clone` (parallel)
 - Pre-boot customization with `virt-customize`
 - Sets hostname
 - Configures static IP address
@@ -52,6 +52,28 @@ Notes:
 - Keep the venv activated while running playbooks from this repository.
 - If you open a new shell, run `source .venv/bin/activate` again.
 - To remove the environment later: `rm -rf .venv`
+
+## Quick Start After Git Clone
+
+```bash
+git clone <your-repo-url>
+cd kvm-clone-ansible
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install "ansible-core==2.16.14"
+```
+
+Edit only one file:
+```bash
+vim vars/vms.yml
+```
+
+Run:
+```bash
+ansible-playbook clone-vms.yml --check
+ansible-playbook clone-vms.yml
+```
 
 ## Directory Structure
 
@@ -153,7 +175,7 @@ The playbook runs in 7 phases (most run in parallel):
 | Phase | Operation | Parallel |
 |-------|-----------|----------|
 | 0 | Pre-flight checks, build VM list | - |
-| 1 | Clone VMs with `virt-clone` | ❌ (storage pool locks) |
+| 1 | Clone VMs with `virt-clone` | ✅ |
 | 2 | Customize disks (`virt-customize`) | ✅ |
 | 3 | Configure resources (vCPU/RAM) | ✅ |
 | 4 | Start VMs | ✅ |
@@ -189,6 +211,9 @@ In `vars/vms.yml`:
 | `restart_template_after` | Restart template after cloning | `false` |
 | `wait_for_ssh` | Wait for SSH before continuing | `true` |
 | `confirm_delete` | Allow destructive cleanup in `cleanup-vms.yml` | `false` |
+| `clone_async_timeout_sec` | Timeout per `virt-clone` job (seconds) | `1800` |
+| `clone_wait_retries` | Poll retry count while waiting for clone jobs | `180` |
+| `clone_wait_delay_sec` | Poll delay between clone status checks (seconds) | `10` |
 
 ## Useful Aliases
 
